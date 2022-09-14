@@ -4,13 +4,13 @@ const mem = std.mem;
 
 const usage =
     \\USAGE:
-    \\    wasmsign [SUBCOMMAND] file [FLAGS]
+    \\    {s} [SUBCOMMAND] file [FLAGS]
     \\
     \\FLAGS:
     \\    -h, --help            Prints help information
     \\    -o [path]             Output path of the signed binary
     \\    -v                    Verbose output
-    \\    -k                    The key file to sign or verify the binary
+    \\    -k                    The key file to sign or verify the binary with
     \\SUBCOMMANDS:
     \\    sign                  Signs a Wasm binary using a private key
     \\    verify                Verifies the signature of a Wasm binary from a public key
@@ -50,7 +50,7 @@ pub fn main() !void {
     var output_path: ?[]const u8 = null;
     var key_path: ?[]const u8 = null;
 
-    var arg_i: usize = 0;
+    var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
         const arg = args[arg_i];
         if (mem.eql(u8, arg, "sign")) {
@@ -71,7 +71,7 @@ pub fn main() !void {
             verbose_output = true;
             continue;
         } else if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
-            printUsageAndExit();
+            printUsageAndExit(args[0]);
         }
 
         positionals.appendAssumeCapacity(mem.sliceTo(arg, 0));
@@ -98,9 +98,9 @@ pub fn main() !void {
     defer wasm_binary.deinit(gpa);
 }
 
-pub fn printUsageAndExit() noreturn {
+pub fn printUsageAndExit(self_exe_path: [:0]const u8) noreturn {
     const std_out = std.io.getStdOut();
-    std_out.writeAll(usage) catch {};
+    std_out.writer().print(usage, .{self_exe_path}) catch {};
     std_out.writeAll("\n") catch {};
     std.os.exit(0);
 }
