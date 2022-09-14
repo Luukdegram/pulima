@@ -8,9 +8,13 @@ const mem = std.mem;
 
 /// Pointer to the raw data of the Wasm module
 raw_data: [*]const u8,
+/// Module size in bytes, excludes magic bytes
+/// and the binary version.
+size: u32,
 types: SectionHeader,
 functions: SectionHeader,
 tables: SectionHeader,
+imports: SectionHeader,
 memories: SectionHeader,
 globals: SectionHeader,
 exports: SectionHeader,
@@ -27,6 +31,8 @@ pub const ParseError = error{
     UnknownSectionNumber,
     OutOfMemory,
     EndOfStream,
+    /// leb128 encoded integer doesn't fit into given size
+    Overflow,
 };
 
 /// Represents the meta data of an entire section.
@@ -85,8 +91,11 @@ pub fn getNamed(module: *const Module, name: []const u8) ?CustomSectionHeader {
 
 /// Represents an empty unparsed Module.
 const empty: Module = .{
+    .raw_data = undefined,
+    .size = 0,
     .types = .{},
     .functions = .{},
+    .imports = .{},
     .tables = .{},
     .memories = .{},
     .globals = .{},
@@ -111,6 +120,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
     }
 
     var module = empty;
+    module.size = @intCast(u32, data.len - 8);
 
     var custom_sections = std.ArrayList(CustomSectionHeader).init(gpa);
     defer custom_sections.deinit();

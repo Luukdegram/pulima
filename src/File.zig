@@ -21,7 +21,7 @@ pub fn open(gpa: std.mem.Allocator, path: []const u8) !File {
     const file = try std.fs.cwd().openFile(path, .{});
     errdefer file.close();
 
-    const content = file.readToEndAlloc(gpa, std.math.maxInt(u32)); // wasm32 binaries couldn't be larger than this
+    const content = try file.readToEndAlloc(gpa, std.math.maxInt(u32)); // wasm32 binaries couldn't be larger than this
     errdefer gpa.free(content);
     const module = try Module.parse(gpa, content);
 
