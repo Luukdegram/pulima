@@ -59,14 +59,14 @@ pub const CustomSectionHeader = struct {
     /// The name of the custom section
     name: []const u8,
     /// Pointer to the data of a custom section
-    data: [*]const u8,
+    raw_data: [*]const u8,
     /// The size of the custom section in bytes, excluding the name field.
     size: u32,
     /// The order in which the custom section is found in the Wasm module.
     index: u32,
 
     /// Returns the data of the custom section as a slice
-    pub fn sliced(header: CustomSectionHeader) []const u8 {
+    pub fn data(header: CustomSectionHeader) []const u8 {
         return header.data[0..header.size];
     }
 };
@@ -144,7 +144,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
 
                 try custom_sections.append(.{
                     .name = name,
-                    .data = data[fbs.pos..].ptr,
+                    .raw_data = data[fbs.pos..].ptr,
                     .size = @intCast(u32, current_read_position - fbs.pos),
                     .index = current_section_index,
                 });
