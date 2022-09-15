@@ -67,7 +67,7 @@ pub const CustomSectionHeader = struct {
 
     /// Returns the data of the custom section as a slice
     pub fn data(header: CustomSectionHeader) []const u8 {
-        return header.data[0..header.size];
+        return header.raw_data[0..header.size];
     }
 };
 
@@ -145,9 +145,10 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
                 try custom_sections.append(.{
                     .name = name,
                     .raw_data = data[fbs.pos..].ptr,
-                    .size = @intCast(u32, current_read_position - fbs.pos),
+                    .size = @intCast(u32, fbs.pos - current_read_position),
                     .index = current_section_index,
                 });
+                fbs.pos = current_read_position + section_size;
             },
             .start => {
                 module.start = try leb.readULEB128(u32, reader);
@@ -168,7 +169,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
                     .index = current_section_index,
                     .offset = @intCast(u32, fbs.pos),
                     .entries = entries,
-                    .size = @intCast(u32, current_read_position - fbs.pos),
+                    .size = @intCast(u32, fbs.pos - current_read_position),
                 };
 
                 switch (section) {
@@ -184,6 +185,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
                     .data => module.data = header,
                     else => unreachable,
                 }
+                fbs.pos = current_read_position + section_size;
             },
             else => fbs.pos += section_size, // skip section
         }
