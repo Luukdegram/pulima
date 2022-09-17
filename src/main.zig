@@ -1,5 +1,6 @@
 const std = @import("std");
 const File = @import("File.zig");
+const signature = @import("signature.zig");
 const mem = std.mem;
 
 const usage =
@@ -92,10 +93,16 @@ pub fn main() !void {
             };
             _ = output; // TODO
         },
-        .verify => {},
+        .verify => {
+            var wasm_binary = try File.open(gpa, positionals.items[0]);
+            defer wasm_binary.deinit(gpa);
+
+            signature.verify("", &wasm_binary.module) catch |err| switch (err) {
+                // TODO: Nice error note per error
+                else => |e| return e,
+            };
+        },
     }
-    var wasm_binary = try File.open(gpa, positionals.items[0]);
-    defer wasm_binary.deinit(gpa);
 }
 
 pub fn printUsageAndExit(self_exe_path: [:0]const u8) noreturn {
