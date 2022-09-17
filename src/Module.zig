@@ -145,7 +145,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
                 try custom_sections.append(.{
                     .name = name,
                     .raw_data = data[fbs.pos..].ptr,
-                    .size = @intCast(u32, fbs.pos - current_read_position),
+                    .size = @intCast(u32, section_size - (fbs.pos - current_read_position)),
                     .index = current_section_index,
                 });
                 fbs.pos = current_read_position + section_size;
@@ -169,7 +169,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
                     .index = current_section_index,
                     .offset = @intCast(u32, fbs.pos),
                     .entries = entries,
-                    .size = @intCast(u32, fbs.pos - current_read_position),
+                    .size = @intCast(u32, section_size - (fbs.pos - current_read_position)),
                 };
 
                 switch (section) {
