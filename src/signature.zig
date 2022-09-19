@@ -6,15 +6,14 @@
 const std = @import("std");
 const Module = @import("Module.zig");
 const Sha256 = std.crypto.hash.sha2.Sha256;
+const Ed25519 = std.crypto.sign.Ed25519;
 
 pub fn sign(key: []const u8, module: *const Module) !void {
     _ = key; // TODO
     _ = module; // TODO
 }
 
-pub fn verify(key: []const u8, module: *const Module) !void {
-    _ = key; // TODO
-
+pub fn verify(verifier: anytype, module: *const Module) !void {
     const signature_header = module.getNamed("signature") orelse {
         std.log.err("signature section missing", .{});
         return error.MissingSignature;
@@ -46,12 +45,35 @@ pub fn verify(key: []const u8, module: *const Module) !void {
         std.log.debug("   signatures: {d}", .{signed_hashes.signature_count});
         bytes_ptr += signed_hashes.size() + (leb_state.count - previous_state_count);
 
-        var hash_it = signed_hashes.hashIterator();
-        _ = hash_it;
         var signature_it = signed_hashes.signatureIterator(&leb_state);
+        var verified_hash_count: u32 = 0;
         while (try signature_it.next()) |signature| {
             std.log.debug("      signature key: {s}", .{signature.key()});
-            std.log.debug("      signature: {d}", .{signature.len});
+            std.log.debug("      signature: {s}", .{signature.asSlice()});
+            verifier.verify(signed_hashes.hash(), signature.asSlice()) catch continue; // invalid signature for hash
+            verified_hash_count += 1;
+        }
+
+        if (verified_hash_count == 0) {
+            return error.NoValidSignatures;
+        }
+
+        // we have verified at least one hash was signed correctly for the given key
+        // now we hash the data ourselves and ensure it matches a verified hash.
+        var hasher = Sha256.init(.{});
+        hasher.update(module.raw_data[module.types.offset..]);
+        var final_hash: [Sha256.digest_length]u8 = undefined;
+        hasher.final(&final_hash);
+
+        var hash_matches = false;
+        var hash_it = signed_hashes.hashIterator();
+        while (hash_it.next()) |hash| {
+            if (std.mem.eql(u8, hash, &final_hash)) {
+                hash_matches = true;
+            }
+        }
+        if (!hash_matches) {
+            return error.NoValidSignatures;
         }
     }
 }
@@ -133,8 +155,8 @@ const SignedHashes = struct {
         const hashes_len = count * hash_len;
         offset += hashes_len + 1;
         const sig_count = try state.read(u32, bytes[offset..]);
-        offset += state.count - prev_count;
-        const signatures = bytes[offset + 1 ..].ptr;
+        offset += state.count - prev_count + 1;
+        const signatures = bytes[offset..].ptr;
 
         return .{
             .hashes_count = count,
@@ -144,6 +166,11 @@ const SignedHashes = struct {
             .signatures = signatures,
             .signature_bytes_len = @intCast(u32, bytes.len - offset),
         };
+    }
+
+    /// Returns all hashes concatenated as a single slice
+    fn hash(signed_hashes: *const SignedHashes) []const u8 {
+        return signed_hashes.hashes[0 .. signed_hashes.hash_len * signed_hashes.hashes_count];
     }
 
     /// Builds and returns an iterator for iterating all signatures
@@ -194,7 +221,7 @@ const Signature = struct {
         offset += key_id_len;
         const len = try state.read(u32, bytes[offset..]);
         offset += state.count - previous_count;
-        const signature = bytes[offset + 1 ..].ptr;
+        const signature = bytes[offset..].ptr;
         return .{
             .key_id_len = key_id_len,
             .key_id = key_id,
@@ -262,5 +289,60 @@ const LebState = struct {
 
         state.count += group + 1;
         return @truncate(T, value);
+    }
+};
+
+pub fn PublicKey(
+    comptime Context: type,
+    comptime VerifyError: type,
+    comptime verifyFn: fn (
+        context: Context,
+        message: []const u8,
+        signature: []const u8,
+    ) VerifyError!void,
+) type {
+    return struct {
+        const Verifier = @This();
+        context: Context,
+
+        pub fn verify(verifier: Verifier, message: []const u8, signature: []const u8) VerifyError!void {
+            return verifyFn(verifier.context, message, signature);
+        }
+    };
+}
+
+/// Public key using the Edwards 25519 elliptic curve for verifying
+/// signatures in a Wasm module.
+const Ed25519PublicKey = struct {
+    /// Represents the ID of a specific key which is used to
+    /// differentiate between the different public keys as multiple keys
+    /// are allowed to sign different parts of the module.
+    key_id: []const u8,
+    /// The key representation in bytes
+    key: [Ed25519.public_length]u8,
+
+    /// When verifying the signature of a given message,
+    /// the following errors may occur, resulting in an
+    /// invalid signature.
+    const VerifyError = error{
+        SignatureVerificationError,
+        WeakPublicKeyError,
+        EncodingError,
+        NonCanonicalError,
+        IdentityElementError,
+        SignatureTooShort,
+    };
+
+    /// Verifies the signature for a given message using the Edwards25519 elliptic curve.
+    /// Only when no error was returned, is the signature to be considered valid for the given message.
+    fn verify(key: Ed25519PublicKey, message: []const u8, signature: []const u8) VerifyError!void {
+        if (signature.len < Ed25519.signature_length) return error.SignatureTooShort;
+        Ed25519.verify(signature[0..Ed25519.signature_length].*, message, key.key);
+    }
+
+    const Verifier = PublicKey(Ed25519PublicKey, VerifyError, Ed25519.verify);
+
+    fn verifier(key: Ed25519PublicKey) Verifier {
+        return .{ .context = key };
     }
 };
