@@ -64,6 +64,8 @@ pub const CustomSectionHeader = struct {
     size: u32,
     /// The order in which the custom section is found in the Wasm module.
     index: u32,
+    /// Offset from where the raw data of the custom section starts within the Wasm module.
+    offset: u32,
 
     /// Returns the data of the custom section as a slice
     pub fn data(header: CustomSectionHeader) []const u8 {
@@ -147,6 +149,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
                     .raw_data = data[fbs.pos..].ptr,
                     .size = @intCast(u32, section_size - (fbs.pos - current_read_position)),
                     .index = current_section_index,
+                    .offset = @intCast(u32, fbs.pos),
                 });
                 fbs.pos = current_read_position + section_size;
             },

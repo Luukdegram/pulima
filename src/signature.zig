@@ -61,7 +61,8 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         // we have verified at least one hash was signed correctly for the given key
         // now we hash the data ourselves and ensure it matches a verified hash.
         var hasher = Sha256.init(.{});
-        hasher.update(module.raw_data[module.types.offset..]);
+        const module_start = signature_header.offset + signature_header.size;
+        hasher.update(module.raw_data[module_start .. module.size - module_start]);
         var final_hash: [Sha256.digest_length]u8 = undefined;
         hasher.final(&final_hash);
 
@@ -140,9 +141,10 @@ const SignedHashes = struct {
         /// Deserializes and returns the next hash. Returns null when end of iterator has been reached.
         fn next(it: *HashIterator) ?[]const u8 {
             if (it.index == it.max_count) return null;
-            const hash = it.bytes[it.index * it.hash_len ..][0..it.hash_len];
+            const start = it.index * it.hash_len;
+            const hash_bytes = it.bytes[start .. start + it.hash_len];
             it.index += 1;
-            return hash;
+            return hash_bytes;
         }
     };
 
