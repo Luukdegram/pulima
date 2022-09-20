@@ -50,7 +50,8 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         while (try signature_it.next()) |signature| {
             std.log.debug("      signature key: {s}", .{signature.key()});
             std.log.debug("      signature: {s}", .{signature.asSlice()});
-            verifier.verify(signed_hashes.hash(), signature.asSlice()) catch continue; // invalid signature for hash
+            // verifier.verify(signed_hashes.hash(), signature.asSlice()) catch continue; // invalid signature for hash
+            try verifier.verify(signed_hashes.hash(), signature.asSlice());
             verified_hash_count += 1;
         }
 

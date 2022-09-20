@@ -1,6 +1,7 @@
 const std = @import("std");
 const File = @import("File.zig");
 const signature = @import("signature.zig");
+const keys = @import("key.zig");
 const mem = std.mem;
 
 const usage =
@@ -96,8 +97,21 @@ pub fn main() !void {
         .verify => {
             var wasm_binary = try File.open(gpa, positionals.items[0]);
             defer wasm_binary.deinit(gpa);
+            const path = key_path orelse printErrorAndExit("Missing public key argument.");
+            const key_file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+                error.FileNotFound => printErrorAndExit("Public key could not be found at given path."),
+                else => printErrorAndExit("Could not open public key file."),
+            };
+            defer key_file.close();
+            var key_buf: [65]u8 = undefined; // type + public + secret key max length
+            const len = try key_file.readAll(&key_buf);
+            if (key_buf[0] != 0x01) {
+                return printErrorAndExit("Key pair not supported. Please provide a public key.");
+            }
+            const public_key = try keys.PublicKey.fromBytes(key_buf[0..len]);
+            std.debug.print("Public key: 0x{x} - {d}: {s}\n", .{ key_buf[0], len, key_buf[1..len] });
 
-            signature.verify("", &wasm_binary.module) catch |err| switch (err) {
+            signature.verify(public_key.verifier(), &wasm_binary.module) catch |err| switch (err) {
                 // TODO: Nice error note per error
                 else => |e| return e,
             };

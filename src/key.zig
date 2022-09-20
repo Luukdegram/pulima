@@ -50,6 +50,8 @@ pub const PublicKey = struct {
 
     const Verifier = SignatureVerifier(PublicKey, VerifyError, PublicKey.verify);
 
+    /// Returns a verifier instance which can be used to verify signatures
+    /// using this public key and the Edwards 25519 elliptic curve for verifying.
     pub fn verifier(key: PublicKey) Verifier {
         return .{ .context = key };
     }
