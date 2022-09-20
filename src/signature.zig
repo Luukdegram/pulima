@@ -292,7 +292,7 @@ const LebState = struct {
     }
 };
 
-pub fn PublicKey(
+pub fn Verifier(
     comptime Context: type,
     comptime VerifyError: type,
     comptime verifyFn: fn (
@@ -302,47 +302,11 @@ pub fn PublicKey(
     ) VerifyError!void,
 ) type {
     return struct {
-        const Verifier = @This();
+        const SignatureVerifier = @This();
         context: Context,
 
-        pub fn verify(verifier: Verifier, message: []const u8, signature: []const u8) VerifyError!void {
+        pub fn verify(verifier: SignatureVerifier, message: []const u8, signature: []const u8) VerifyError!void {
             return verifyFn(verifier.context, message, signature);
         }
     };
 }
-
-/// Public key using the Edwards 25519 elliptic curve for verifying
-/// signatures in a Wasm module.
-const Ed25519PublicKey = struct {
-    /// Represents the ID of a specific key which is used to
-    /// differentiate between the different public keys as multiple keys
-    /// are allowed to sign different parts of the module.
-    key_id: []const u8,
-    /// The key representation in bytes
-    key: [Ed25519.public_length]u8,
-
-    /// When verifying the signature of a given message,
-    /// the following errors may occur, resulting in an
-    /// invalid signature.
-    const VerifyError = error{
-        SignatureVerificationError,
-        WeakPublicKeyError,
-        EncodingError,
-        NonCanonicalError,
-        IdentityElementError,
-        SignatureTooShort,
-    };
-
-    /// Verifies the signature for a given message using the Edwards25519 elliptic curve.
-    /// Only when no error was returned, is the signature to be considered valid for the given message.
-    fn verify(key: Ed25519PublicKey, message: []const u8, signature: []const u8) VerifyError!void {
-        if (signature.len < Ed25519.signature_length) return error.SignatureTooShort;
-        Ed25519.verify(signature[0..Ed25519.signature_length].*, message, key.key);
-    }
-
-    const Verifier = PublicKey(Ed25519PublicKey, VerifyError, Ed25519.verify);
-
-    fn verifier(key: Ed25519PublicKey) Verifier {
-        return .{ .context = key };
-    }
-};
