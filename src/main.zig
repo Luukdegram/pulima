@@ -105,10 +105,7 @@ pub fn main() !void {
             defer key_file.close();
             var key_buf: [65]u8 = undefined; // type + public + secret key max length
             const len = try key_file.readAll(&key_buf);
-            if (key_buf[0] != 0x01) {
-                return printErrorAndExit("Key pair not supported. Please provide a public key.");
-            }
-            const public_key = try keys.PublicKey.fromBytes(key_buf[0..len]);
+            const public_key = try keys.PublicKey.deserialize(key_buf[0..len]);
             std.debug.print("Public key: 0x{x} - {d}: {s}\n", .{ key_buf[0], len, key_buf[1..len] });
 
             signature.verify(public_key.verifier(), &wasm_binary.module) catch |err| switch (err) {

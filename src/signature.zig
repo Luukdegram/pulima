@@ -36,7 +36,7 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
     std.log.debug("verifying hashes...", .{});
 
     var signature_index: u32 = 0;
-    var bytes_ptr: usize = 2 + leb_state.count; // we already retrieved the signature header
+    var bytes_ptr: usize = leb_state.count; // we already retrieved the signature header
     while (signature_index < header.signed_hash_count) : (signature_index += 1) {
         const raw_signature_bytes = signature_bytes[bytes_ptr..];
         var previous_state_count = leb_state.count;
@@ -48,10 +48,13 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         var signature_it = signed_hashes.signatureIterator(&leb_state);
         var verified_hash_count: u32 = 0;
         while (try signature_it.next()) |signature| {
-            std.log.debug("      signature key: {s}", .{signature.key()});
-            std.log.debug("      signature: {s}", .{signature.asSlice()});
-            // verifier.verify(signed_hashes.hash(), signature.asSlice()) catch continue; // invalid signature for hash
-            try verifier.verify(signed_hashes.hash(), signature.asSlice());
+            // if (!std.mem.eql(u8, signature.key(), verifier.identifier())) continue; // TODO
+            const wasm_sign = "wasmsig".*;
+            var msg: [(32 * 64) + wasm_sign.len + 3]u8 = undefined;
+            msg[0..wasm_sign.len].* = wasm_sign;
+            msg[wasm_sign.len..][0..3].* = .{ 0x01, 0x01, 0x01 };
+            std.mem.copy(u8, msg[wasm_sign.len + 3 ..], signed_hashes.hash());
+            try verifier.verify(msg[0 .. wasm_sign.len + 3 + (signed_hashes.hash_len * signed_hashes.hashes_count)], signature.asSlice());
             verified_hash_count += 1;
         }
 
@@ -95,13 +98,15 @@ const Hash = enum(u8) {
 const SignatureHeader = struct {
     version: u8,
     hash: Hash,
+    content_type: u8,
     signed_hash_count: u32,
 
     fn deserialize(bytes: []const u8, state: *LebState) !SignatureHeader {
         return .{
-            .version = bytes[0],
-            .hash = @intToEnum(Hash, bytes[1]),
-            .signed_hash_count = try state.read(u32, bytes[2..]),
+            .version = try state.read(u7, bytes),
+            .content_type = try state.read(u7, bytes[state.count..]),
+            .hash = @intToEnum(Hash, try state.read(u7, bytes[state.count..])),
+            .signed_hash_count = try state.read(u32, bytes[state.count..]),
         };
     }
 };
@@ -152,13 +157,20 @@ const SignedHashes = struct {
     /// Deserializes the raw bytes into a `SignedHashes`.
     fn deserialize(bytes: []const u8, hash_len: u32, state: *LebState) !SignedHashes {
         var prev_count = state.count;
-        const count = try state.read(u32, bytes);
+        const bytes_len = try state.read(u32, bytes);
+        _ = bytes_len; // we do not need this information
         var offset = state.count - prev_count;
+        const count = try state.read(u32, bytes[offset..]);
+        offset = state.count - prev_count;
+        prev_count = state.count;
         const hashes = bytes[offset..].ptr;
         const hashes_len = count * hash_len;
-        offset += hashes_len + 1;
+        offset += hashes_len;
         const sig_count = try state.read(u32, bytes[offset..]);
-        offset += state.count - prev_count + 1;
+        offset += state.count - prev_count;
+        prev_count = state.count;
+        const signature_length = try state.read(u32, bytes[offset..]);
+        offset += state.count - prev_count;
         const signatures = bytes[offset..].ptr;
 
         return .{
@@ -167,7 +179,7 @@ const SignedHashes = struct {
             .hash_len = hash_len,
             .signature_count = sig_count,
             .signatures = signatures,
-            .signature_bytes_len = @intCast(u32, bytes.len - offset),
+            .signature_bytes_len = signature_length,
         };
     }
 
@@ -217,14 +229,16 @@ const Signature = struct {
 
     /// From a slice of raw bytes, deserializes them into a `Signature`
     fn deserialize(bytes: []const u8, state: *LebState) !Signature {
-        const previous_count = state.count;
+        var previous_count = state.count;
         const key_id_len = try state.read(u32, bytes);
         var offset = state.count - previous_count;
+        previous_count = state.count;
         const key_id = bytes[offset..].ptr;
         offset += key_id_len;
         const len = try state.read(u32, bytes[offset..]);
         offset += state.count - previous_count;
         const signature = bytes[offset..].ptr;
+
         return .{
             .key_id_len = key_id_len,
             .key_id = key_id,

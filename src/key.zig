@@ -20,7 +20,7 @@ pub const PublicKey = struct {
     /// the following errors may occur, resulting in an
     /// invalid signature.
     const VerifyError = error{
-        SignatureTooShort,
+        InvalidSignature,
     } ||
         errors.SignatureVerificationError ||
         errors.WeakPublicKeyError ||
@@ -31,14 +31,13 @@ pub const PublicKey = struct {
     /// Verifies the signature for a given message using the Edwards25519 elliptic curve.
     /// Only when no error was returned, is the signature to be considered valid for the given message.
     pub fn verify(key: PublicKey, message: []const u8, signature: []const u8) VerifyError!void {
-        if (signature.len < Ed25519.signature_length) return error.SignatureTooShort;
+        if (signature.len != Ed25519.signature_length) return error.InvalidSignature;
         return Ed25519.verify(signature[0..Ed25519.signature_length].*, message, key.key);
     }
 
-    /// From a given slice of bytes constructs a `PublicKey`
-    /// Returns `error.InvalidKey` when the slice is too short or contains
-    /// an invalid identifier.
-    pub fn fromBytes(bytes: []const u8) error{InvalidKey}!PublicKey {
+    /// From a given slice of bytes constructs a `PublicKey`.
+    /// Returns `error.InvalidKey` when the data does not follow the tooling convention.
+    pub fn deserialize(bytes: []const u8) error{InvalidKey}!PublicKey {
         if (bytes.len < 33) return error.InvalidKey;
         if (bytes[0] != 0x01) return error.InvalidKey;
 
@@ -48,7 +47,7 @@ pub const PublicKey = struct {
         };
     }
 
-    const Verifier = SignatureVerifier(PublicKey, VerifyError, PublicKey.verify);
+    const Verifier = SignatureVerifier(PublicKey, VerifyError, verify);
 
     /// Returns a verifier instance which can be used to verify signatures
     /// using this public key and the Edwards 25519 elliptic curve for verifying.
