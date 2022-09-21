@@ -123,6 +123,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Module {
 
     var module = empty;
     module.size = @intCast(u32, data.len - 8);
+    module.raw_data = data[8..].ptr;
 
     var custom_sections = std.ArrayList(CustomSectionHeader).init(gpa);
     defer custom_sections.deinit();
