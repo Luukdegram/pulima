@@ -49,15 +49,18 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         var verified_hash_count: u32 = 0;
         while (try signature_it.next()) |signature| {
             if (!std.mem.eql(u8, signature.key(), verifier.identifier())) continue; // TODO
+            std.log.debug("      verifying signature: {}", .{signature});
             var msg: [max_message_len]u8 = undefined;
-            msg[0..wasm_sign.len].* = wasm_sign.*;
-            msg[wasm_sign.len..][0..3].* = .{ spec_version, @enumToInt(header.hash), default_context_type };
-            std.mem.copy(u8, msg[wasm_sign.len + 3 ..], signed_hashes.hash());
-            try verifier.verify(msg[0 .. wasm_sign.len + 3 + (signed_hashes.hash_len * signed_hashes.hashes_count)], signature.asSlice());
+            msg[0..wasmsig.len].* = wasmsig.*;
+            msg[wasmsig.len..][0..3].* = .{ spec_version, @enumToInt(header.hash), default_context_type };
+            std.mem.copy(u8, msg[min_message_len..], signed_hashes.hash());
+            verifier.verify(msg[0 .. min_message_len + signed_hashes.totalHashSize()], signature.asSlice()) catch continue;
             verified_hash_count += 1;
+            std.log.debug("      signature verified successfully", .{});
         }
 
         if (verified_hash_count == 0) {
+            std.log.err("No signature could be verified", .{});
             return error.NoValidSignatures;
         }
 
@@ -68,6 +71,7 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         hasher.update(module.raw_data[module_start..module.size]);
         var final_hash: [Sha256.digest_length]u8 = undefined;
         hasher.final(&final_hash);
+        std.log.debug("      verifying at least one of the hashes matches", .{});
 
         var hash_matches = false;
         var hash_it = signed_hashes.hashIterator();
@@ -77,17 +81,22 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
             }
         }
         if (!hash_matches) {
+            std.log.err("No matching hash was found", .{});
             return error.NoValidSignatures;
         }
+        std.log.debug("      found matching hash", .{});
     }
+    std.log.debug("module signature verified successfully", .{});
 }
 
 /// The maximum size the message can be that must be verified for its signature.
 /// This size can be used to construct a buffer, large enough to construct the message,
 /// without requiring any heap allocations.
-const max_message_len = Hash.max_hash_length * SignedHashes.max_hashes + ("wasmsig".len) + 3;
+const max_message_len = Hash.max_hash_length * SignedHashes.max_hashes + min_message_len;
+/// The minimum size a message must be
+const min_message_len = wasmsig.len + 3;
 /// String part of message used to verify the signature
-const wasm_sign = "wasmsig";
+const wasmsig = "wasmsig";
 /// Current supported spec version
 pub const spec_version = 0x01;
 /// Default context type, which allows to specify the context on what the signature
@@ -204,6 +213,11 @@ const SignedHashes = struct {
         return signed_hashes.hashes[0 .. signed_hashes.hash_len * signed_hashes.hashes_count];
     }
 
+    /// Returns the total size in bytes of all hashes concatenated.
+    fn totalHashSize(signed_hashes: *const SignedHashes) u32 {
+        return signed_hashes.hash_len * signed_hashes.hashes_count;
+    }
+
     /// Builds and returns an iterator for iterating all signatures
     fn signatureIterator(signed_hashes: *const SignedHashes, state: *LebState) SignatureIterator {
         return .{
@@ -281,6 +295,16 @@ const Signature = struct {
     /// Returns true for when the `Signature` contains a key
     fn hasKey(signature: *const Signature) bool {
         return signature.key_id_len > 0;
+    }
+
+    pub fn format(signature: Signature, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = options;
+        _ = fmt;
+        var key_to_print: []const u8 = "(no key)";
+        if (signature.key_id_len > 0) {
+            key_to_print = signature.key();
+        }
+        try writer.writeAll(key_to_print);
     }
 };
 
