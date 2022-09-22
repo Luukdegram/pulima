@@ -49,10 +49,9 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         var verified_hash_count: u32 = 0;
         while (try signature_it.next()) |signature| {
             // if (!std.mem.eql(u8, signature.key(), verifier.identifier())) continue; // TODO
-            const wasm_sign = "wasmsig".*;
-            var msg: [(32 * 64) + wasm_sign.len + 3]u8 = undefined;
-            msg[0..wasm_sign.len].* = wasm_sign;
-            msg[wasm_sign.len..][0..3].* = .{ 0x01, 0x01, 0x01 };
+            var msg: [max_message_len]u8 = undefined;
+            msg[0..wasm_sign.len].* = wasm_sign.*;
+            msg[wasm_sign.len..][0..3].* = .{ spec_version, @enumToInt(header.hash), default_context_type };
             std.mem.copy(u8, msg[wasm_sign.len + 3 ..], signed_hashes.hash());
             try verifier.verify(msg[0 .. wasm_sign.len + 3 + (signed_hashes.hash_len * signed_hashes.hashes_count)], signature.asSlice());
             verified_hash_count += 1;
@@ -65,8 +64,8 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         // we have verified at least one hash was signed correctly for the given key
         // now we hash the data ourselves and ensure it matches a verified hash.
         var hasher = Sha256.init(.{});
-        const module_start = signature_header.offset + signature_header.size;
-        hasher.update(module.raw_data[module_start .. module.size - module_start]);
+        const module_start = signature_header.offset + signature_header.size - 8; // minus 8 for magic bytes + version
+        hasher.update(module.raw_data[module_start..module.size]);
         var final_hash: [Sha256.digest_length]u8 = undefined;
         hasher.final(&final_hash);
 
@@ -83,9 +82,21 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
     }
 }
 
+/// The maximum size the message can be that must be verified for its signature.
+/// This size can be used to construct a buffer, large enough to construct the message,
+/// without requiring any heap allocations.
+const max_message_len = Hash.max_hash_length * SignedHashes.max_hashes + ("wasmsig".len) + 3;
+/// String part of message used to verify the signature
+const wasm_sign = "wasmsig";
+/// Current supported spec version
+pub const spec_version = 0x01;
+/// Default context type, which allows to specify the context on what the signature
+/// is being used for.
+pub const default_context_type = 0x01;
+
+/// Supported hashes by wasmsign
 const Hash = enum(u8) {
     sha256 = 0x01,
-    _,
 
     fn len(hash: Hash) u32 {
         switch (hash) {
@@ -93,6 +104,8 @@ const Hash = enum(u8) {
             else => return 0,
         }
     }
+
+    const max_hash_length = 32;
 };
 
 const SignatureHeader = struct {
@@ -105,7 +118,7 @@ const SignatureHeader = struct {
         return .{
             .version = try state.read(u7, bytes),
             .content_type = try state.read(u7, bytes[state.count..]),
-            .hash = @intToEnum(Hash, try state.read(u7, bytes[state.count..])),
+            .hash = try std.meta.intToEnum(Hash, try state.read(u7, bytes[state.count..])),
             .signed_hash_count = try state.read(u32, bytes[state.count..]),
         };
     }
@@ -118,6 +131,9 @@ const SignedHashes = struct {
     signature_count: u32,
     signatures: [*]const u8,
     signature_bytes_len: u32,
+
+    const max_hashes = 64;
+    const max_signatures = 256;
 
     const SignatureIterator = struct {
         index: u32,
