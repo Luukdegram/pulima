@@ -47,11 +47,18 @@ pub const PublicKey = struct {
         };
     }
 
-    const Verifier = SignatureVerifier(PublicKey, VerifyError, verify);
+    const Verifier = SignatureVerifier(PublicKey, VerifyError, verify, identifier);
 
     /// Returns a verifier instance which can be used to verify signatures
     /// using this public key and the Edwards 25519 elliptic curve for verifying.
     pub fn verifier(key: PublicKey) Verifier {
         return .{ .context = key };
+    }
+
+    /// Returns the public key's identifier. This returns null when no
+    /// identifier is set. It is safe to access `key_id` directly as this
+    /// function is used to comply to the `Verifier` interface.
+    pub fn identifier(key: PublicKey) []const u8 {
+        return key.key_id;
     }
 };

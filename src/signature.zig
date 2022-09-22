@@ -48,7 +48,7 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         var signature_it = signed_hashes.signatureIterator(&leb_state);
         var verified_hash_count: u32 = 0;
         while (try signature_it.next()) |signature| {
-            // if (!std.mem.eql(u8, signature.key(), verifier.identifier())) continue; // TODO
+            if (!std.mem.eql(u8, signature.key(), verifier.identifier())) continue; // TODO
             var msg: [max_message_len]u8 = undefined;
             msg[0..wasm_sign.len].* = wasm_sign.*;
             msg[wasm_sign.len..][0..3].* = .{ spec_version, @enumToInt(header.hash), default_context_type };
@@ -101,7 +101,6 @@ const Hash = enum(u8) {
     fn len(hash: Hash) u32 {
         switch (hash) {
             .sha256 => return Sha256.digest_length,
-            else => return 0,
         }
     }
 
@@ -174,8 +173,8 @@ const SignedHashes = struct {
     fn deserialize(bytes: []const u8, hash_len: u32, state: *LebState) !SignedHashes {
         var prev_count = state.count;
         const bytes_len = try state.read(u32, bytes);
-        _ = bytes_len; // we do not need this information
-        var offset = state.count - prev_count;
+        const bytes_len_len = state.count - prev_count;
+        var offset = bytes_len_len;
         const count = try state.read(u32, bytes[offset..]);
         offset = state.count - prev_count;
         prev_count = state.count;
@@ -188,6 +187,7 @@ const SignedHashes = struct {
         const signature_length = try state.read(u32, bytes[offset..]);
         offset += state.count - prev_count;
         const signatures = bytes[offset..].ptr;
+        std.debug.assert(bytes_len == offset + signature_length - bytes_len_len);
 
         return .{
             .hashes_count = count,
@@ -205,7 +205,7 @@ const SignedHashes = struct {
     }
 
     /// Builds and returns an iterator for iterating all signatures
-    fn signatureIterator(signed_hashes: SignedHashes, state: *LebState) SignatureIterator {
+    fn signatureIterator(signed_hashes: *const SignedHashes, state: *LebState) SignatureIterator {
         return .{
             .index = 0,
             .max_count = signed_hashes.signature_count,
@@ -325,6 +325,11 @@ const LebState = struct {
     }
 };
 
+/// Constructs a generic verifier which allows to verify a message
+/// and signature of any length, where the `context` decides what it must
+/// comply to, in order to verify a signature. This allows you to verify
+/// arbitrary signatures without having the knowledge on a comptime-known length
+/// or specific key.
 pub fn Verifier(
     comptime Context: type,
     comptime VerifyError: type,
@@ -333,13 +338,21 @@ pub fn Verifier(
         message: []const u8,
         signature: []const u8,
     ) VerifyError!void,
+    comptime identifierFn: fn (context: Context) []const u8,
 ) type {
     return struct {
         const SignatureVerifier = @This();
         context: Context,
 
+        /// Verifies a message with the given signature.
+        /// Returns an error on failure, with no result on a successfull verification
         pub fn verify(verifier: SignatureVerifier, message: []const u8, signature: []const u8) VerifyError!void {
             return verifyFn(verifier.context, message, signature);
+        }
+
+        /// For the given verifier, returns its identifier.
+        pub fn identifier(verifier: SignatureVerifier) []const u8 {
+            return identifierFn(verifier.context);
         }
     };
 }
