@@ -380,3 +380,35 @@ pub fn Verifier(
         }
     };
 }
+
+/// Constructs a generic signer which allows to sign a message
+/// and constructs a signature of any length. This allows you to
+/// sign a given message using any key-pair with any signature length.
+pub fn Signer(
+    comptime Context: type,
+    comptime SignError: type,
+    comptime signFn: fn (
+        context: Context,
+        message: []const u8,
+        buffer: []u8,
+    ) SignError!usize,
+    comptime identifierFn: fn (context: Context) []const u8,
+) type {
+    return struct {
+        const SignatureSigner = @This();
+        context: Context,
+
+        /// Signs the message and generates a signature of which will be written into
+        /// the given `buffer`. The length that was written is returned as value,
+        /// or an error when a message could not be signed.
+        /// This does *not* use a nounce.
+        pub fn sign(signer: SignatureSigner, message: []const u8, buffer: []u8) SignError!usize {
+            return signFn(signer.context, message, buffer);
+        }
+
+        /// For a given signer, returns its identifier
+        pub fn identifier(signer: SignatureSigner) []const u8 {
+            return identifierFn(signer.context);
+        }
+    };
+}
