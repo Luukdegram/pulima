@@ -7,12 +7,65 @@ const std = @import("std");
 const Module = @import("Module.zig");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Ed25519 = std.crypto.sign.Ed25519;
+const leb = std.leb;
 
-pub fn sign(key: []const u8, module: *const Module) !void {
-    _ = key; // TODO
-    _ = module; // TODO
+/// Signs the given `Module` by constructing a signature section.
+/// The new constructed signature section will be written using
+/// the given writer, leaving the given `module` in-tact.
+pub fn sign(gpa: std.mem.Allocator, signer: anytype, module: *const Module, writer: anytype) !void {
+    std.debug.assert(module.getNamed("signature") == null); // module is already signed
+    _ = signer; // TODO
+
+    var hash = Sha256.init(.{});
+    var hash_out: [Sha256.digest_length]u8 = undefined;
+    hash.update(module.raw_data[0..module.size]);
+    hash.final(&hash_out);
+
+    const header: SignatureHeader = .{
+        .version = spec_version,
+        .hash = .sha256,
+        .context = default_context_type,
+        .signed_hash_count = 1,
+    };
+
+    var section_bytes = std.ArrayList(u8).init(gpa);
+    defer section_bytes.deinit();
+
+    const signed_hashes: SignedHashes = .{
+        .hashes_count = 1,
+        .hashes = &hash_out,
+        .hash_len = header.hash.len(),
+        .signature_count = 1,
+        // .signatures = &signatures, // TODO
+        // .signature_byte_len = 65, // TODO
+    };
+
+    try header.serialize(section_bytes.writer());
+
+    var current_offset = @intCast(u32, section_bytes.items.len);
+    try signed_hashes.serialize(section_bytes.writer());
+    var new_offset = @intCast(u32, section_bytes.items.len);
+    const diff = new_offset - current_offset;
+    const diff_len = LebState.lebSize(diff);
+    var buf: [5]u8 = undefined;
+    leb.writeUnsignedFixed(u32, &buf, diff);
+    try section_bytes.insertSlice(current_offset, buf[0..diff_len]);
+
+    try writer.writeByte(@enumToInt(std.wasm.Section.custom));
+    const section_name = "signature";
+    const name_len_leb = LebState.lebSize(@intCast(u32, section_name.len));
+    const total_len = @intCast(u32, section_name.len + name_len_leb + section_bytes.items.len);
+    try leb.writeULEB128(u32, total_len);
+    try leb.writeULEB128(u32, @intCast(u32, section_name.len));
+    try writer.writeAll(section_name);
+    try writer.writeAll(section_bytes.items);
 }
 
+/// Verifies the `Module`'s signature using the given `verifier`.
+/// Ensures the Module contains a signature, of which its specification
+/// version must match, and then verifies it.
+/// Returns nothing on success, but fails with an error if the signature
+/// does not match in any way.
 pub fn verify(verifier: anytype, module: *const Module) !void {
     const signature_header = module.getNamed("signature") orelse {
         std.log.err("signature section missing", .{});
@@ -122,6 +175,8 @@ const SignatureHeader = struct {
     content_type: u8,
     signed_hash_count: u32,
 
+    /// From the given slice of bytes, decodes it into a `SignatureHeader`.
+    /// The leb-encoded fields will modify the internal state of the given `LebState`.
     fn deserialize(bytes: []const u8, state: *LebState) !SignatureHeader {
         return .{
             .version = try state.read(u7, bytes),
@@ -129,6 +184,14 @@ const SignatureHeader = struct {
             .hash = try std.meta.intToEnum(Hash, try state.read(u7, bytes[state.count..])),
             .signed_hash_count = try state.read(u32, bytes[state.count..]),
         };
+    }
+
+    /// Serializes the header of the signature section into its leb128-encoded form.
+    fn serialize(header: SignatureHeader, writer: anytype) !void {
+        try writer.writeByte(header.version);
+        try writer.writeByte(@enumToInt(header.hash));
+        try writer.writeByte(header.content_type);
+        try leb.writeULEB128(writer, header.signed_hash_count);
     }
 };
 
@@ -208,6 +271,19 @@ const SignedHashes = struct {
         };
     }
 
+    /// Deserialises a `SignedHashes` structure into its serialised-encoding.
+    /// This also serializes each signature into its corresponding encoding.
+    fn serialize(signed_hashes: *const SignedHashes, writer: anytype) !void {
+        try leb.writeULEB128(writer, signed_hashes.hashes_count);
+        try writer.writeAll(signed_hashes.hash());
+        try leb.writeULEB128(writer, signed_hashes.signature_count);
+        var sig_it = signed_hashes.signatureIterator();
+        while (try sig_it.next()) |signature| {
+            try leb.writeULEB128(writer, signature.lebSize());
+            try signature.serialize(writer);
+        }
+    }
+
     /// Returns all hashes concatenated as a single slice
     fn hash(signed_hashes: *const SignedHashes) []const u8 {
         return signed_hashes.hashes[0 .. signed_hashes.hash_len * signed_hashes.hashes_count];
@@ -277,9 +353,24 @@ const Signature = struct {
         };
     }
 
+    /// Serialises the `Signature` into its serialized encoding
+    fn serialize(signature: Signature, writer: anytype) !void {
+        try leb.writeULEB128(writer, signature.key_id_len);
+        try writer.writeAll(signature.key());
+        try leb.writeULEB128(writer, signature.len);
+        try writer.writeAll(signature.asSlice());
+    }
+
     /// Returns total size of the signature + key in bytes.
     fn size(signature: *const Signature) u32 {
         return signature.key_id_len + signature.len;
+    }
+
+    /// Returns the total size of the signature + key in bytes
+    /// using the leb128 encoding, including the length of the key and signature.
+    fn lebSize(signature: *const Signature) u32 {
+        const lens = LebState.lebSize(signature.key_id_len) + LebState.lebSize(signature.len);
+        return lens + signature.size();
     }
 
     /// Returns the signature as a slice instead of a multi-pointer
@@ -346,6 +437,20 @@ const LebState = struct {
 
         state.count += group + 1;
         return @truncate(T, value);
+    }
+
+    /// From a given value, returns the amount of bytes it costs
+    /// to store it in its 128-leb form.
+    fn lebSize(uint_value: anytype) u32 {
+        const T = @TypeOf(uint_value);
+        const U = if (@typeInfo(T).Int.bits < 8) u8 else T;
+        var value = @intCast(U, uint_value);
+
+        var size: u32 = 0;
+        while (value != 0) : (size += 1) {
+            value >>= 7;
+        }
+        return size;
     }
 };
 

@@ -92,7 +92,7 @@ pub fn getNamed(module: *const Module, name: []const u8) ?CustomSectionHeader {
 }
 
 /// Represents an empty unparsed Module.
-const empty: Module = .{
+pub const empty: Module = .{
     .raw_data = undefined,
     .size = 0,
     .types = .{},
