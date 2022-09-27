@@ -14,51 +14,73 @@ const leb = std.leb;
 /// the given writer, leaving the given `module` in-tact.
 pub fn sign(gpa: std.mem.Allocator, signer: anytype, module: *const Module, writer: anytype) !void {
     std.debug.assert(module.getNamed("signature") == null); // module is already signed
-    _ = signer; // TODO
-
+    std.log.debug("no signature found, signing module...", .{});
     var hash = Sha256.init(.{});
     var hash_out: [Sha256.digest_length]u8 = undefined;
     hash.update(module.raw_data[0..module.size]);
     hash.final(&hash_out);
+    std.log.debug("finished hashing module", .{});
 
     const header: SignatureHeader = .{
         .version = spec_version,
         .hash = .sha256,
-        .context = default_context_type,
+        .content_type = default_context_type,
         .signed_hash_count = 1,
     };
 
     var section_bytes = std.ArrayList(u8).init(gpa);
     defer section_bytes.deinit();
 
+    var signature_buf: [SignedHashes.max_signatures * 64]u8 = undefined;
+    const message = Message.init(spec_version, header.hash, default_context_type, &hash_out);
+    const signature_length = try signer.sign(message.data(), &signature_buf);
+    std.log.debug("successfully signed the module", .{});
+    std.log.debug("serialising signature section...", .{});
+
+    const signature: Signature = .{
+        .key_id_len = 0,
+        .key_id = &[_]u8{},
+        .signature = signature_buf[0..signature_length].ptr,
+        .len = @intCast(u32, signature_length),
+    };
+
     const signed_hashes: SignedHashes = .{
         .hashes_count = 1,
         .hashes = &hash_out,
         .hash_len = header.hash.len(),
         .signature_count = 1,
-        // .signatures = &signatures, // TODO
-        // .signature_byte_len = 65, // TODO
+        .signatures = undefined,
+        .signature_bytes_len = 0,
     };
 
     try header.serialize(section_bytes.writer());
+    std.log.debug("   serialised the header. Spec version: {d}, using hash: {s}, with content type: 0x{x}", .{
+        header.version,
+        @tagName(header.hash),
+        header.content_type,
+    });
 
     var current_offset = @intCast(u32, section_bytes.items.len);
     try signed_hashes.serialize(section_bytes.writer());
+    std.log.debug("   serialised the signed hashes section", .{});
+    try signature.serialize(section_bytes.writer());
+    std.log.debug("   serialised the signatures", .{});
     var new_offset = @intCast(u32, section_bytes.items.len);
     const diff = new_offset - current_offset;
     const diff_len = LebState.lebSize(diff);
     var buf: [5]u8 = undefined;
-    leb.writeUnsignedFixed(u32, &buf, diff);
+    leb.writeUnsignedFixed(5, &buf, diff);
     try section_bytes.insertSlice(current_offset, buf[0..diff_len]);
 
     try writer.writeByte(@enumToInt(std.wasm.Section.custom));
     const section_name = "signature";
     const name_len_leb = LebState.lebSize(@intCast(u32, section_name.len));
     const total_len = @intCast(u32, section_name.len + name_len_leb + section_bytes.items.len);
-    try leb.writeULEB128(u32, total_len);
-    try leb.writeULEB128(u32, @intCast(u32, section_name.len));
+    try leb.writeULEB128(writer, total_len);
+    try leb.writeULEB128(writer, @intCast(u32, section_name.len));
     try writer.writeAll(section_name);
     try writer.writeAll(section_bytes.items);
+    std.log.debug("finished constructing the \"signature\" section", .{});
 }
 
 /// Verifies the `Module`'s signature using the given `verifier`.
@@ -97,17 +119,14 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
         std.log.debug("   hash count: {d}", .{signed_hashes.hashes_count});
         std.log.debug("   signatures: {d}", .{signed_hashes.signature_count});
         bytes_ptr += signed_hashes.size() + (leb_state.count - previous_state_count);
+        const msg = Message.init(header.version, header.hash, header.content_type, signed_hashes.hash());
 
         var signature_it = signed_hashes.signatureIterator(&leb_state);
         var verified_hash_count: u32 = 0;
         while (try signature_it.next()) |signature| {
             if (!std.mem.eql(u8, signature.key(), verifier.identifier())) continue; // TODO
             std.log.debug("      verifying signature: {}", .{signature});
-            var msg: [max_message_len]u8 = undefined;
-            msg[0..wasmsig.len].* = wasmsig.*;
-            msg[wasmsig.len..][0..3].* = .{ spec_version, @enumToInt(header.hash), default_context_type };
-            std.mem.copy(u8, msg[min_message_len..], signed_hashes.hash());
-            verifier.verify(msg[0 .. min_message_len + signed_hashes.totalHashSize()], signature.asSlice()) catch continue;
+            verifier.verify(msg.data(), signature.asSlice()) catch continue;
             verified_hash_count += 1;
             std.log.debug("      signature verified successfully", .{});
         }
@@ -167,6 +186,30 @@ const Hash = enum(u8) {
     }
 
     const max_hash_length = 32;
+};
+
+/// Message that will be signed or used to verify a signature
+/// This is essentially a little helper struct to easily construct
+/// a message without having to manually setup up the initial array.
+const Message = struct {
+    buffer: [max_message_len]u8,
+    len: usize,
+
+    /// Constructs a new `Message` which fills the internal buffer in according
+    /// to the tooling-convention, which can then be signed to generate a signature.
+    fn init(version: u8, hash: Hash, content_type: u8, hashes: []const u8) Message {
+        var message: Message = .{ .buffer = undefined, .len = 0 };
+        std.mem.copy(u8, &message.buffer, wasmsig);
+        message.buffer[wasmsig.len..][0..3].* = .{ version, @enumToInt(hash), content_type };
+        std.mem.copy(u8, message.buffer[min_message_len..], hashes);
+        message.len = min_message_len + hashes.len;
+        return message;
+    }
+
+    /// Returns the message as a slice, using only the data that was filled.
+    fn data(message: *const Message) []const u8 {
+        return message.buffer[0..message.len];
+    }
 };
 
 const SignatureHeader = struct {
@@ -254,6 +297,7 @@ const SignedHashes = struct {
         const hashes_len = count * hash_len;
         offset += hashes_len;
         const sig_count = try state.read(u32, bytes[offset..]);
+        if (sig_count > 1) return error.Unsupported;
         offset += state.count - prev_count;
         prev_count = state.count;
         const signature_length = try state.read(u32, bytes[offset..]);
@@ -272,26 +316,16 @@ const SignedHashes = struct {
     }
 
     /// Deserialises a `SignedHashes` structure into its serialised-encoding.
-    /// This also serializes each signature into its corresponding encoding.
     fn serialize(signed_hashes: *const SignedHashes, writer: anytype) !void {
         try leb.writeULEB128(writer, signed_hashes.hashes_count);
         try writer.writeAll(signed_hashes.hash());
         try leb.writeULEB128(writer, signed_hashes.signature_count);
-        var sig_it = signed_hashes.signatureIterator();
-        while (try sig_it.next()) |signature| {
-            try leb.writeULEB128(writer, signature.lebSize());
-            try signature.serialize(writer);
-        }
+        // signatures are serialised independently of this function
     }
 
     /// Returns all hashes concatenated as a single slice
     fn hash(signed_hashes: *const SignedHashes) []const u8 {
         return signed_hashes.hashes[0 .. signed_hashes.hash_len * signed_hashes.hashes_count];
-    }
-
-    /// Returns the total size in bytes of all hashes concatenated.
-    fn totalHashSize(signed_hashes: *const SignedHashes) u32 {
-        return signed_hashes.hash_len * signed_hashes.hashes_count;
     }
 
     /// Builds and returns an iterator for iterating all signatures
@@ -355,6 +389,7 @@ const Signature = struct {
 
     /// Serialises the `Signature` into its serialized encoding
     fn serialize(signature: Signature, writer: anytype) !void {
+        try leb.writeULEB128(writer, signature.lebSize());
         try leb.writeULEB128(writer, signature.key_id_len);
         try writer.writeAll(signature.key());
         try leb.writeULEB128(writer, signature.len);
