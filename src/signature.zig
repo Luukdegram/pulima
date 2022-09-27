@@ -60,17 +60,16 @@ pub fn sign(gpa: std.mem.Allocator, signer: anytype, module: *const Module, writ
         header.content_type,
     });
 
-    var current_offset = @intCast(u32, section_bytes.items.len);
+    const current_offset = @intCast(u32, section_bytes.items.len);
     try signed_hashes.serialize(section_bytes.writer());
     std.log.debug("   serialised the signed hashes section", .{});
     try signature.serialize(section_bytes.writer());
     std.log.debug("   serialised the signatures", .{});
-    var new_offset = @intCast(u32, section_bytes.items.len);
-    const diff = new_offset - current_offset;
-    const diff_len = LebState.lebSize(diff);
+    const new_offset = @intCast(u32, section_bytes.items.len);
     var buf: [5]u8 = undefined;
-    leb.writeUnsignedFixed(5, &buf, diff);
-    try section_bytes.insertSlice(current_offset, buf[0..diff_len]);
+    var size_state: LebState = .{ .count = 0 };
+    size_state.write(u32, &buf, new_offset - current_offset);
+    try section_bytes.insertSlice(current_offset, buf[0..size_state.count]);
 
     try writer.writeByte(@enumToInt(std.wasm.Section.custom));
     const section_name = "signature";
@@ -105,6 +104,11 @@ pub fn verify(verifier: anytype, module: *const Module) !void {
     if (header.hash != .sha256) {
         std.log.err("expected sha256 as has function", .{});
         return error.UnsupportedHashFunction;
+    }
+
+    if (header.signed_hash_count > 1) {
+        std.log.err("wasmsign currently only supports verifying the single module signature", .{});
+        return error.UnsupportedSignedHashesCount;
     }
 
     std.log.debug("signature contains {d} signed hashes", .{header.signed_hash_count});
@@ -287,9 +291,8 @@ const SignedHashes = struct {
     /// Deserializes the raw bytes into a `SignedHashes`.
     fn deserialize(bytes: []const u8, hash_len: u32, state: *LebState) !SignedHashes {
         var prev_count = state.count;
-        const bytes_len = try state.read(u32, bytes);
-        const bytes_len_len = state.count - prev_count;
-        var offset = bytes_len_len;
+        _ = try state.read(u32, bytes); // The length is not needed, this can simply be inferred...
+        var offset = state.count - prev_count;
         const count = try state.read(u32, bytes[offset..]);
         offset = state.count - prev_count;
         prev_count = state.count;
@@ -303,7 +306,6 @@ const SignedHashes = struct {
         const signature_length = try state.read(u32, bytes[offset..]);
         offset += state.count - prev_count;
         const signatures = bytes[offset..].ptr;
-        std.debug.assert(bytes_len == offset + signature_length - bytes_len_len);
 
         return .{
             .hashes_count = count,
@@ -472,6 +474,28 @@ const LebState = struct {
 
         state.count += group + 1;
         return @truncate(T, value);
+    }
+
+    /// Writes a leb128-encoded integer to the given array.
+    /// Array must be equal to the maximum byte-length for the given type `T`.
+    /// Increments the `state`'s `count` with the length that was required to encode the integer
+    /// to 128leb and was written to the given buffer `buf`.
+    pub fn write(state: *LebState, comptime T: type, buf: *[(@typeInfo(T).Int.bits + 6) / 7]u8, uint_value: T) void {
+        const U = if (@typeInfo(T).Int.bits < 8) u8 else T;
+        var value = @intCast(U, uint_value);
+
+        var group: u32 = 0;
+        while (true) : (group += 1) {
+            const byte = @truncate(u8, value & 0x7f);
+            value >>= 7;
+            if (value == 0) {
+                buf[group] = byte;
+                break;
+            } else {
+                buf[group] = byte | 0x80;
+            }
+        }
+        state.count += group + 1;
     }
 
     /// From a given value, returns the amount of bytes it costs
