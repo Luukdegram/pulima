@@ -43,7 +43,7 @@ pub const PublicKey = struct {
         if (bytes[0] != 0x01) return error.InvalidKey;
 
         return PublicKey{
-            .key_id = &.{},
+            .key_id = &[_]u8{},
             .key = bytes[1..33].*,
         };
     }
@@ -84,11 +84,12 @@ pub const KeyPair = struct {
     /// From a given slice of bytes constructs a `KeyPair`.
     /// Returns `error.InvalidKey` when the data does not follow the tooling convention.
     pub fn deserialize(bytes: []const u8) error{InvalidKeyPair}!KeyPair {
-        if (bytes.len < 65) return error.InvalidKey;
-        if (bytes[0] != 0x81) return error.InvalidKey;
+        if (bytes.len < 65) return error.InvalidKeyPair;
+        if (bytes[0] != 0x81) return error.InvalidKeyPair;
 
         return KeyPair{
             .private_key = bytes[1..65].*,
+            .key_id = &[_]u8{},
         };
     }
 
@@ -106,7 +107,7 @@ pub const KeyPair = struct {
     pub fn sign(key_pair: KeyPair, message: []const u8, buffer: []u8) SignError!usize {
         if (buffer.len < Ed25519.signature_length) return error.BufferTooSmall;
         const pair = Ed25519.KeyPair.fromSecretKey(key_pair.private_key);
-        const signature = Ed25519.sign(message, pair, null);
+        const signature = try Ed25519.sign(message, pair, null);
         std.mem.copy(u8, buffer, &signature);
         return Ed25519.signature_length;
     }

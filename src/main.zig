@@ -87,30 +87,46 @@ pub fn main() !void {
         printErrorAndExit("Missing input file");
     }
 
+    var wasm_binary = try File.open(gpa, positionals.items[0]);
+    defer wasm_binary.deinit(gpa);
+    const path = key_path orelse printErrorAndExit("Missing public key argument.");
+    const key_file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => printErrorAndExit("Public key could not be found at given path."),
+        else => printErrorAndExit("Could not open public key file."),
+    };
+    defer key_file.close();
+    var key_buf: [65]u8 = undefined; // type + public + secret key max length
+    const len = try key_file.readAll(&key_buf);
+
     switch (command) {
         .sign => {
-            const output = output_path orelse {
-                printErrorAndExit("Missing output path.");
+            const result_path = output_path orelse printErrorAndExit("Missing output path.");
+
+            const key_pair = keys.KeyPair.deserialize(key_buf[0..len]) catch {
+                printErrorAndExit("secret key could not be deserialised.");
             };
-            _ = output; // TODO
+            var signature_data = std.ArrayList(u8).init(gpa);
+            defer signature_data.deinit();
+
+            signature.sign(gpa, key_pair.signer(), &wasm_binary.module, signature_data.writer()) catch {
+                printErrorAndExit("Could not sign the Wasm module.");
+            };
+
+            const result_binary = try std.fs.cwd().createFile(result_path, .{});
+            defer result_binary.close();
+
+            const magic: []const u8 = (&std.wasm.magic ++ &std.wasm.version);
+            var io_vec = [_]std.os.iovec_const{
+                .{ .iov_base = magic.ptr, .iov_len = magic.len },
+                .{ .iov_base = signature_data.items.ptr, .iov_len = signature_data.items.len },
+                .{ .iov_base = wasm_binary.module.raw_data, .iov_len = wasm_binary.module.size },
+            };
+            try result_binary.writevAll(&io_vec);
         },
         .verify => {
-            var wasm_binary = try File.open(gpa, positionals.items[0]);
-            defer wasm_binary.deinit(gpa);
-            const path = key_path orelse printErrorAndExit("Missing public key argument.");
-            const key_file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
-                error.FileNotFound => printErrorAndExit("Public key could not be found at given path."),
-                else => printErrorAndExit("Could not open public key file."),
-            };
-            defer key_file.close();
-            var key_buf: [65]u8 = undefined; // type + public + secret key max length
-            const len = try key_file.readAll(&key_buf);
             const public_key = try keys.PublicKey.deserialize(key_buf[0..len]);
-            std.debug.print("Public key: 0x{x} - {d}: {s}\n", .{ key_buf[0], len, key_buf[1..len] });
-
-            signature.verify(public_key.verifier(), &wasm_binary.module) catch |err| switch (err) {
-                // TODO: Nice error note per error
-                else => |e| return e,
+            signature.verify(public_key.verifier(), &wasm_binary.module) catch {
+                printErrorAndExit("Could not verify signature.");
             };
         },
     }
