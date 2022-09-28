@@ -127,3 +127,16 @@ pub const KeyPair = struct {
         };
     }
 };
+
+/// Generates a new keypair and writes the secret and public components
+/// to the corresponding secret and public paths.
+pub fn generateKeyPair(secret_path: []const u8, public_path: []const u8) !void {
+    const key_pair = try Ed25519.KeyPair.create(null);
+    const secret_file = try std.fs.cwd().createFile(secret_path, .{});
+    defer secret_file.close();
+    try secret_file.writeAll((&[_]u8{0x81} ++ &key_pair.secret_key));
+
+    const public_file = try std.fs.cwd().createFile(public_path, .{});
+    defer public_file.close();
+    try public_file.writeAll((&[_]u8{0x01} ++ &key_pair.public_key));
+}

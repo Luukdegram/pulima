@@ -12,10 +12,12 @@ const usage =
     \\    -h, --help            Prints help information
     \\    -o [path]             Output path of the signed binary
     \\    -v                    Verbose output
-    \\    -k                    The key file to sign or verify the binary with
+    \\    -s [path]             The key file to sign the binary module with, or to write the secret key component to
+    \\    -p [path]             The public key to verify a signature for, or to write the public key component to
     \\SUBCOMMANDS:
     \\    sign                  Signs a Wasm binary using a private key
     \\    verify                Verifies the signature of a Wasm binary from a public key
+    \\    keygen                Generates a new secret and public key pair
 ;
 
 pub fn log(
@@ -34,6 +36,7 @@ var verbose_output: bool = false;
 const SubCommand = enum {
     sign,
     verify,
+    keygen,
 };
 
 pub fn main() !void {
@@ -50,7 +53,8 @@ pub fn main() !void {
 
     var sub_command: ?SubCommand = null;
     var output_path: ?[]const u8 = null;
-    var key_path: ?[]const u8 = null;
+    var secret_path: ?[]const u8 = null;
+    var public_path: ?[]const u8 = null;
 
     var arg_i: usize = 1;
     while (arg_i < args.len) : (arg_i += 1) {
@@ -61,13 +65,20 @@ pub fn main() !void {
         } else if (mem.eql(u8, arg, "verify")) {
             sub_command = .verify;
             continue;
+        } else if (mem.eql(u8, arg, "keygen")) {
+            sub_command = .keygen;
+            continue;
         } else if (mem.eql(u8, arg, "-o")) {
             arg_i += 1;
             output_path = getNextArg(args, arg_i, "Missing path after flag '-0'.");
             continue;
-        } else if (mem.eql(u8, arg, "-k")) {
+        } else if (mem.eql(u8, arg, "-s")) {
             arg_i += 1;
-            key_path = getNextArg(args, arg_i, "Missing key path after flag '-k'.");
+            secret_path = getNextArg(args, arg_i, "Missing secret key path after flag '-s'.");
+            continue;
+        } else if (mem.eql(u8, arg, "-p")) {
+            arg_i += 1;
+            public_path = getNextArg(args, arg_i, "Missing public key path after flag '-p'.");
             continue;
         } else if (mem.eql(u8, arg, "-v")) {
             verbose_output = true;
@@ -83,30 +94,30 @@ pub fn main() !void {
         printErrorAndExit("Missing subcommand");
     };
 
-    if (positionals.items.len == 0) {
+    if (positionals.items.len == 0 and command != .keygen) {
         printErrorAndExit("Missing input file");
     }
-
-    var wasm_binary = try File.open(gpa, positionals.items[0]);
-    defer wasm_binary.deinit(gpa);
-    const path = key_path orelse printErrorAndExit("Missing public key argument.");
-    const key_file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
-        error.FileNotFound => printErrorAndExit("Public key could not be found at given path."),
-        else => printErrorAndExit("Could not open public key file."),
-    };
-    defer key_file.close();
-    var key_buf: [65]u8 = undefined; // type + public + secret key max length
-    const len = try key_file.readAll(&key_buf);
 
     switch (command) {
         .sign => {
             const result_path = output_path orelse printErrorAndExit("Missing output path.");
 
+            const path = secret_path orelse printErrorAndExit("Missing secret key argument.");
+            const key_file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+                error.FileNotFound => printErrorAndExit("Public key could not be found at given path."),
+                else => printErrorAndExit("Could not open public key file."),
+            };
+            defer key_file.close();
+            var key_buf: [65]u8 = undefined; // type + public + secret key max length
+            const len = try key_file.readAll(&key_buf);
             const key_pair = keys.KeyPair.deserialize(key_buf[0..len]) catch {
                 printErrorAndExit("secret key could not be deserialised.");
             };
             var signature_data = std.ArrayList(u8).init(gpa);
             defer signature_data.deinit();
+
+            var wasm_binary = try File.open(gpa, positionals.items[0]);
+            defer wasm_binary.deinit(gpa);
 
             signature.sign(gpa, key_pair.signer(), &wasm_binary.module, signature_data.writer()) catch {
                 printErrorAndExit("Could not sign the Wasm module.");
@@ -124,9 +135,28 @@ pub fn main() !void {
             try result_binary.writevAll(&io_vec);
         },
         .verify => {
+            const path = public_path orelse printErrorAndExit("Missing public key argument.");
+            const key_file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+                error.FileNotFound => printErrorAndExit("Public key could not be found at given path."),
+                else => printErrorAndExit("Could not open public key file."),
+            };
+            defer key_file.close();
+            var key_buf: [65]u8 = undefined; // type + public + secret key max length
+            const len = try key_file.readAll(&key_buf);
             const public_key = try keys.PublicKey.deserialize(key_buf[0..len]);
+
+            var wasm_binary = try File.open(gpa, positionals.items[0]);
+            defer wasm_binary.deinit(gpa);
+
             signature.verify(public_key.verifier(), &wasm_binary.module) catch {
                 printErrorAndExit("Could not verify signature.");
+            };
+        },
+        .keygen => {
+            const secret = secret_path orelse printErrorAndExit("Missing secret key path.");
+            const public = public_path orelse printErrorAndExit("Missing public key path.");
+            keys.generateKeyPair(secret, public) catch {
+                printErrorAndExit("Failed generating a new key-pair, please try again...");
             };
         },
     }
