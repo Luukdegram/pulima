@@ -5,7 +5,7 @@ pub fn build(b: *std.build.Builder) void {
     const mode = b.standardReleaseOptions();
 
     // contains the CLI to sign and verify wasm binaries
-    const exe = b.addExecutable("wasmsign", "src/main.zig");
+    const exe = b.addExecutable("pulima", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();
@@ -25,4 +25,13 @@ pub fn build(b: *std.build.Builder) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&exe_tests.step);
+
+    // autodocs
+    {
+        const lib = b.addObject("pulima", "src/lib.zig");
+        lib.setTarget(target);
+        lib.emit_docs = .emit;
+        const doc_step = b.step("docs", "Generate documentation for Pūlima");
+        doc_step.dependOn(&lib.step);
+    }
 }

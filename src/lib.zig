@@ -1,3 +1,3 @@
 pub const Module = @import("Module.zig");
-pub const keys = @import("keys.zig");
+pub const key = @import("key.zig");
 pub const signature = @import("signature.zig");

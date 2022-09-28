@@ -91,7 +91,7 @@ pub fn main() !void {
     }
 
     const command = sub_command orelse {
-        printErrorAndExit("Missing subcommand");
+        printUsageAndExit(args[0]);
     };
 
     if (positionals.items.len == 0 and command != .keygen) {
