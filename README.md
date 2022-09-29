@@ -54,7 +54,7 @@ This will install a binary called `pulima` at `~/.local/bin/pulima`
 
 Pūlima can also be used as a library, which is as simply as adding `src/lib.zig` as a package to your `build.zig` file:
 ```zig
-exe.addPackagePath("punima", "libs/punima/src/lib.zig"); // where 'lib/punima' is the folder where the library is installed
+exe.addPackagePath("pulima", "libs/pulima/src/lib.zig"); // where 'lib/pulima' is the folder where the library is installed
 ```
 
 ## Docs
