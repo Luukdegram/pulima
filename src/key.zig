@@ -115,7 +115,7 @@ pub const KeyPair = struct {
     /// Returns the key pair's identifier. It is safe to access `key_id` directly as this
     /// function is used to comply to the `Signer` interface.
     pub fn identifier(key_pair: KeyPair) []const u8 {
-        return key_pair.identifier();
+        return key_pair.key_id;
     }
 
     /// Returns the `KeyPair` as a `PublicKey` which can then be used

@@ -37,9 +37,10 @@ pub fn sign(gpa: std.mem.Allocator, signer: anytype, module: *const Module, writ
     std.log.debug("successfully signed the module", .{});
     std.log.debug("serialising signature section...", .{});
 
+    const key_identifier = signer.identifier();
     const signature: Signature = .{
-        .key_id_len = 0,
-        .key_id = &[_]u8{},
+        .key_id_len = @intCast(u32, key_identifier.len),
+        .key_id = key_identifier.ptr,
         .signature = signature_buf[0..signature_length].ptr,
         .len = @intCast(u32, signature_length),
     };
